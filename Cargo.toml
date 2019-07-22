@@ -1,9 +1,13 @@
 [package]
 name = "mirco"
 version = "0.1.0"
-authors = ["Andres Pipicello <andres.pipicello@olx.com>"]
+authors = ["Andres Pipicello", "Pedro Carossi"]
 edition = "2018"
 
 [dependencies]
 dns-lookup = "1.0.1"
 whoami = "0.5.2"
+rustyline = "5.0.0"
+ansi-escapes = "0.1.0"
+log = "^0.4"
+unicode-width = "0.1"
