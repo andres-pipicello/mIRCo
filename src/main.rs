@@ -4,9 +4,19 @@ use std::net::TcpStream;
 
 use bufstream::BufStream;
 use rustyline::error::ReadlineError;
+use std::cmp::min;
+use crossterm::terminal;
+use ansi_escapes::CursorTo;
 
 fn main() -> Result<(), io::Error> {
     let args: Vec<String> = env::args().collect();
+    print!("\x1B[?1049h");
+    std::io::stdout().flush().unwrap();
+    let terminal = terminal();
+    let (w, h) = terminal.terminal_size();
+    print!("\x1B[{};{}r", 1, h);
+    std::io::stdout().flush().unwrap();
+
 
     match &args[1..] {
         [server, nick, real_name] => {
@@ -18,15 +28,19 @@ fn main() -> Result<(), io::Error> {
             );
             let mut stream = TcpStream::connect(format!("{}:{}", server, 6667))?;
             let _join_handle = std::thread::spawn(move || {
+                let mut n = 0;
                 stream.write_all(nick_msg.as_bytes()).unwrap();
                 stream.write_all(user_msg.as_bytes()).unwrap();
                 let mut stream = BufStream::new(stream);
                 loop {
+                    let pos = min(n, h-1);
                     let mut line = String::new();
                     let read_result = stream.read_line(&mut line);
+                    print!("{}", ansi_escapes::CursorSavePosition);
+                    print!("{}", CursorTo::AbsoluteXY(pos, 0));
                     match read_result {
                         Ok(0) => {
-                            eprintln!("connection to {} closed!!!", server);
+                            println!("connection to {} closed!!!", server);
                             break;
                         }
                         Ok(_) => {
@@ -43,19 +57,25 @@ fn main() -> Result<(), io::Error> {
                                 _ => println!("unhandled message {}", line)
                             }
                         }
-                        Err(_) => eprintln!("{}", "unexpected error!!!")
+                        Err(_) => println!("{}", "unexpected error!!!")
                     }
+                    print!("{}", ansi_escapes::CursorRestorePosition);
+                    std::io::stdout().flush();
+                    n = n + 1;
                 }
             });
 
             let mut rl = rustyline::Editor::<()>::new();
 
             loop {
+                print!("{}", CursorTo::AbsoluteXY(h, 0));
+                std::io::stdout().flush().unwrap();
                 let read_line = rl.readline(">> ");
                 match read_line {
                     Ok(line) => println!("Line: {:?}", line),
                     Err(ReadlineError::Interrupted) => {
-                        println!("CTRL-C");
+                        print!("\x1B[?1049l");
+                        std::io::stdout().flush().unwrap();
                         break;
                     }
                     Err(_) => println!("No input"),
