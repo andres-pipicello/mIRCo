@@ -6,15 +6,14 @@ use bufstream::BufStream;
 use rustyline::error::ReadlineError;
 use std::cmp::min;
 use crossterm::terminal;
-use ansi_escapes::CursorTo;
 
 fn main() -> Result<(), io::Error> {
     let args: Vec<String> = env::args().collect();
     print!("\x1B[?1049h");
-    std::io::stdout().flush().unwrap();
     let terminal = terminal();
-    let (w, h) = terminal.terminal_size();
-    print!("\x1B[{};{}r", 1, h);
+    let (_, h) = terminal.terminal_size();
+    std::io::stdout().flush().unwrap();
+    print!("\x1B[{};{}r", 1, h-1);
     std::io::stdout().flush().unwrap();
 
 
@@ -33,11 +32,15 @@ fn main() -> Result<(), io::Error> {
                 stream.write_all(user_msg.as_bytes()).unwrap();
                 let mut stream = BufStream::new(stream);
                 loop {
-                    let pos = min(n, h-1);
+                    let pos = min(n, h-2);
                     let mut line = String::new();
                     let read_result = stream.read_line(&mut line);
+                    while line.ends_with('\n') | line.ends_with('\r') {
+                        line.pop();
+                    }
                     print!("{}", ansi_escapes::CursorSavePosition);
-                    print!("{}", CursorTo::AbsoluteXY(pos, 0));
+                    print!("{}", ansi_escapes::CursorTo::AbsoluteXY(pos, 0));
+                    std::io::stdout().flush().unwrap();
                     match read_result {
                         Ok(0) => {
                             println!("connection to {} closed!!!", server);
@@ -60,7 +63,7 @@ fn main() -> Result<(), io::Error> {
                         Err(_) => println!("{}", "unexpected error!!!")
                     }
                     print!("{}", ansi_escapes::CursorRestorePosition);
-                    std::io::stdout().flush();
+                    std::io::stdout().flush().unwrap();
                     n = n + 1;
                 }
             });
@@ -68,7 +71,7 @@ fn main() -> Result<(), io::Error> {
             let mut rl = rustyline::Editor::<()>::new();
 
             loop {
-                print!("{}", CursorTo::AbsoluteXY(h, 0));
+                print!("{}", ansi_escapes::CursorTo::AbsoluteXY(h, 0));
                 std::io::stdout().flush().unwrap();
                 let read_line = rl.readline(">> ");
                 match read_line {
