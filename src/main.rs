@@ -1,72 +1,149 @@
 use std::{env, io};
-use std::io::{BufRead, Error, ErrorKind, Write};
+use std::io::{BufRead, Error as IoError, ErrorKind, Write};
 use std::net::TcpStream;
-
 use bufstream::BufStream;
 use rustyline::error::ReadlineError;
 use std::cmp::min;
-use crossterm::terminal;
+use crossterm::{terminal, AlternateScreen};
+use std::thread::JoinHandle;
+use std::sync::mpsc;
+use std::sync::mpsc::{Receiver, RecvError, Sender, SendError};
+use crate::irc::{Message, Command};
+use crate::irc::Command::IRC;
+
+
+mod irc;
+
+#[macro_use]
+extern crate strum_macros;
+
+
+enum ThreadError {
+    Io(IoError),
+    Channel,
+}
+
+impl From<IoError> for ThreadError {
+    fn from(err: IoError) -> ThreadError {
+        ThreadError::Io(err)
+    }
+}
+
+impl<T> From<SendError<T>> for ThreadError {
+    fn from(_: SendError<T>) -> ThreadError {
+        ThreadError::Channel
+    }
+}
+
+impl From<RecvError> for ThreadError {
+    fn from(_: RecvError) -> ThreadError {
+        ThreadError::Channel
+    }
+}
+
+type Thread = JoinHandle<Result<(), ThreadError>>;
+
+struct ServerConnection {
+    _thread: Thread
+}
+
+impl ServerConnection {
+    fn new(server: &str, nick: &str, real_name: &str, logger: Sender<String>) -> ServerConnection {
+        let server = String::from(server);
+        let nick_msg = format!("NICK {}\r\n", nick);
+        let user_msg = format!("USER {} 0 * :{}\r\n", whoami::username(), real_name);
+
+        let join_handle = std::thread::spawn(move || {
+            let mut stream = TcpStream::connect(format!("{}:{}", server, 6667))?;
+            stream.write_all(nick_msg.as_bytes()).unwrap();
+            stream.write_all(user_msg.as_bytes()).unwrap();
+            let mut stream = BufStream::new(stream);
+            loop {
+                let mut line = String::new();
+                let read_result = stream.read_line(&mut line);
+                match read_result {
+                    Ok(0) => {
+                        logger.send(format!("connection to {} closed!!!", server))?;
+                        break;
+                    }
+                    Ok(_) => {
+//                        while line.ends_with('\n') | line.ends_with('\r') {
+//                            line.pop();
+//                        }
+                        let parsed = irc::parse_irc_message(&line);
+//                        let pos = line.find(|x: char| x.is_ascii_whitespace()).unwrap_or(line.len());
+                        match &parsed {
+                            Ok(Message { prefix: _, command: IRC("PING"), params }) => {
+                                logger.send(format!("PONG!!!"))?;
+
+                                let raw_rest = params.join(" ");
+                                let rest_index = raw_rest.find(':').unwrap_or(raw_rest.len());
+                                let message = &raw_rest[rest_index..];
+                                stream.write_all(format!("PONG :{}\r\n", message).as_bytes()).unwrap();
+                                stream.flush().unwrap();
+                            }
+                            other => {
+//                                logger.send(format!("{:?}", other))?;
+                            }
+                        }
+                        match &parsed {
+                            Ok(message) => logger.send(format!("OK: \'{:?}\'", message))?,
+                            Err(error) => logger.send(format!("cannot parse: {}: \'{}\'", error, line))?,
+                            _ => {}
+                        }
+                    }
+                    Err(_) => { logger.send(format!("{}", "unexpected error!!!"))?; }
+                }
+            }
+            return Ok(());
+        });
+
+        ServerConnection {
+            _thread: join_handle
+        }
+    }
+}
+
+struct Logger {
+    _thread: Thread
+}
+
+impl Logger {
+    fn new(receiver: Receiver<String>, h: u16) -> Logger {
+        let join_handle = std::thread::spawn(move || {
+            let mut pos = 0;
+            loop {
+                let result = receiver.recv()?;
+                print!("{}", ansi_escapes::CursorSavePosition);
+                print!("{}", ansi_escapes::CursorTo::AbsoluteXY(pos, 0));
+                println!("{}", result);
+                print!("{}", ansi_escapes::CursorRestorePosition);
+                std::io::stdout().flush().unwrap();
+                pos = min(pos + 1, h - 2);
+            }
+        });
+        Logger {
+            _thread: join_handle
+        }
+    }
+}
 
 fn main() -> Result<(), io::Error> {
     let args: Vec<String> = env::args().collect();
-    print!("\x1B[?1049h");
+
+    let alternate_screen = AlternateScreen::to_alternate(false)?;
     let terminal = terminal();
     let (_, h) = terminal.terminal_size();
+    print!("\x1B[{};{}r", 1, h - 1);
     std::io::stdout().flush().unwrap();
-    print!("\x1B[{};{}r", 1, h-1);
-    std::io::stdout().flush().unwrap();
+
+    let (tx, rx) = mpsc::channel();
 
 
     match &args[1..] {
         [server, nick, real_name] => {
-            let server = server.clone();
-            let nick_msg = format!("NICK {}\r\n", nick);
-            let user_msg = format!("USER {} 0 * :{}\r\n",
-                                   whoami::username(),
-                                   real_name
-            );
-            let mut stream = TcpStream::connect(format!("{}:{}", server, 6667))?;
-            let _join_handle = std::thread::spawn(move || {
-                let mut n = 0;
-                stream.write_all(nick_msg.as_bytes()).unwrap();
-                stream.write_all(user_msg.as_bytes()).unwrap();
-                let mut stream = BufStream::new(stream);
-                loop {
-                    let pos = min(n, h-2);
-                    let mut line = String::new();
-                    let read_result = stream.read_line(&mut line);
-                    while line.ends_with('\n') | line.ends_with('\r') {
-                        line.pop();
-                    }
-                    print!("{}", ansi_escapes::CursorSavePosition);
-                    print!("{}", ansi_escapes::CursorTo::AbsoluteXY(pos, 0));
-                    std::io::stdout().flush().unwrap();
-                    match read_result {
-                        Ok(0) => {
-                            println!("connection to {} closed!!!", server);
-                            break;
-                        }
-                        Ok(_) => {
-                            let pos = line.find(|x: char| x.is_ascii_whitespace()).unwrap_or(line.len());
-                            match &line[0..pos] {
-                                "PING" => {
-                                    println!("PONG!!!");
-                                    let raw_rest = &line[pos..];
-                                    let rest_index = raw_rest.find(':').unwrap_or(raw_rest.len());
-                                    let message = &raw_rest[rest_index..];
-                                    stream.write_all(format!("PONG :{}\r\n", message).as_bytes()).unwrap();
-                                    stream.flush().unwrap();
-                                }
-                                _ => println!("unhandled message {}", line)
-                            }
-                        }
-                        Err(_) => println!("{}", "unexpected error!!!")
-                    }
-                    print!("{}", ansi_escapes::CursorRestorePosition);
-                    std::io::stdout().flush().unwrap();
-                    n = n + 1;
-                }
-            });
+            let _logger = Logger::new(rx, h);
+            let _main_connection = ServerConnection::new(server, nick, real_name, tx);
 
             let mut rl = rustyline::Editor::<()>::new();
 
@@ -75,19 +152,18 @@ fn main() -> Result<(), io::Error> {
                 std::io::stdout().flush().unwrap();
                 let read_line = rl.readline(">> ");
                 match read_line {
-                    Ok(line) => println!("Line: {:?}", line),
+                    Ok(_line) => {}
                     Err(ReadlineError::Interrupted) => {
-                        print!("\x1B[?1049l");
-                        std::io::stdout().flush().unwrap();
                         break;
                     }
                     Err(_) => println!("No input"),
                 }
             }
+            alternate_screen.to_main().unwrap();
             return Ok(());
         }
         _ => {
-            return Err(Error::new(ErrorKind::InvalidInput, "Usage: <server> <nick> <real-name>"));
+            return Err(IoError::new(ErrorKind::InvalidInput, "Usage: <server> <nick> <real-name>"));
         }
     }
 }
