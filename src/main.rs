@@ -8,7 +8,7 @@ use crossterm::{terminal, AlternateScreen};
 use std::thread::JoinHandle;
 use std::sync::mpsc;
 use std::sync::mpsc::{Receiver, RecvError, Sender, SendError};
-use crate::irc::{Message, Command};
+use crate::irc::{Message};
 use crate::irc::Command::IRC;
 
 
@@ -82,14 +82,13 @@ impl ServerConnection {
                                 stream.write_all(format!("PONG :{}\r\n", message).as_bytes()).unwrap();
                                 stream.flush().unwrap();
                             }
-                            other => {
+                            _other => {
 //                                logger.send(format!("{:?}", other))?;
                             }
                         }
                         match &parsed {
                             Ok(message) => logger.send(format!("OK: \'{:?}\'", message))?,
-                            Err(error) => logger.send(format!("cannot parse: {}: \'{}\'", error, line))?,
-                            _ => {}
+                            Err(error) => logger.send(format!("cannot parse: {}: \'{}\'", error, line))?
                         }
                     }
                     Err(_) => { logger.send(format!("{}", "unexpected error!!!"))?; }
