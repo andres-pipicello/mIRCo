@@ -3,7 +3,7 @@ The irc client
 
 # usage
 
-cargo run --bin mirco nick@server
+cargo run --bin mirco server nick name
 
 ## Specs
 * https://tools.ietf.org/rfc/rfc1459.txt
