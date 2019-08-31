@@ -1,3 +1,7 @@
+mod irc;
+mod server;
+mod tests;
+
 use std::{env, io};
 use std::io::{BufRead, Error as IoError, ErrorKind, Write};
 use std::net::TcpStream;
@@ -9,10 +13,10 @@ use std::thread::JoinHandle;
 use std::sync::mpsc;
 use std::sync::mpsc::{Receiver, RecvError, Sender, SendError};
 use crate::irc::{Message};
-use crate::irc::Command::IRC;
+use irc::Command::*;
+use crate::server::ServerState::*;
 
 
-mod irc;
 
 #[macro_use]
 extern crate strum_macros;
@@ -54,9 +58,12 @@ impl ServerConnection {
         let user_msg = format!("USER {} 0 * :{}\r\n", whoami::username(), real_name);
 
         let join_handle = std::thread::spawn(move || {
+            let mut server_state = Disconnected;
             let mut stream = TcpStream::connect(format!("{}:{}", server, 6667))?;
+            server_state = Connected;
             stream.write_all(nick_msg.as_bytes()).unwrap();
             stream.write_all(user_msg.as_bytes()).unwrap();
+            server_state = LoggingIn;
             let mut stream = BufStream::new(stream);
             loop {
                 let mut line = String::new();
@@ -64,29 +71,31 @@ impl ServerConnection {
                 match read_result {
                     Ok(0) => {
                         logger.send(format!("connection to {} closed!!!", server))?;
+                        server_state = Disconnected;
                         break;
                     }
                     Ok(_) => {
-//                        while line.ends_with('\n') | line.ends_with('\r') {
-//                            line.pop();
-//                        }
                         let parsed = irc::parse_irc_message(&line);
-//                        let pos = line.find(|x: char| x.is_ascii_whitespace()).unwrap_or(line.len());
                         match &parsed {
-                            Ok(Message { prefix: _, command: IRC("PING"), params }) => {
+                            Ok(Message { prefix: _, command: Irc("PING"), params }) => {
                                 logger.send(format!("PONG!!!"))?;
 
                                 let raw_rest = params.join(" ");
                                 let rest_index = raw_rest.find(':').unwrap_or(raw_rest.len());
                                 let message = &raw_rest[rest_index..];
-                                stream.write_all(format!("PONG :{}\r\n", message).as_bytes()).unwrap();
-                                stream.flush().unwrap();
-                            }
+                                stream.write_all(format!("PONG {}\r\n", message).as_bytes())?;
+                                stream.flush()?;
+                            },
+                            Ok(Message { prefix: _, command: NumericReply("001"), params }) => {
+                                logger.send(format!("Nick {} accepted", params[0]))?;
+                                server_state = LoggedIn;
+                            },
                             _other => {
 //                                logger.send(format!("{:?}", other))?;
                             }
                         }
                         match &parsed {
+                            Ok(Message { prefix: _, command: NumericReply("372"), params: _}) => {},
                             Ok(message) => logger.send(format!("OK: \'{:?}\'", message))?,
                             Err(error) => logger.send(format!("cannot parse: {}: \'{}\'", error, line))?
                         }
@@ -112,10 +121,10 @@ impl Logger {
         let join_handle = std::thread::spawn(move || {
             let mut pos = 0;
             loop {
-                let result = receiver.recv()?;
+                let message = receiver.recv()?;
                 print!("{}", ansi_escapes::CursorSavePosition);
                 print!("{}", ansi_escapes::CursorTo::AbsoluteXY(pos, 0));
-                println!("{}", result);
+                println!("{}", message);
                 print!("{}", ansi_escapes::CursorRestorePosition);
                 std::io::stdout().flush().unwrap();
                 pos = min(pos + 1, h - 2);
