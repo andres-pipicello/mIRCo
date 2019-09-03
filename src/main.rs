@@ -1,6 +1,5 @@
 mod irc;
 mod server;
-mod tests;
 
 use std::{env, io};
 use std::io::{BufRead, Error as IoError, ErrorKind, Write};
@@ -15,8 +14,7 @@ use std::sync::mpsc::{Receiver, RecvError, Sender, SendError};
 use crate::irc::{Message};
 use irc::Command::*;
 use crate::server::ServerState::*;
-
-
+use std::convert::TryInto;
 
 #[macro_use]
 extern crate strum_macros;
@@ -127,7 +125,9 @@ impl Logger {
                 println!("{}", message);
                 print!("{}", ansi_escapes::CursorRestorePosition);
                 std::io::stdout().flush().unwrap();
-                pos = min(pos + 1, h - 2);
+                //TODO: not enough if there are wraparounds
+                let newline_count: u16 = message.matches('\n').count().try_into().unwrap();
+                pos = min(pos + newline_count + 1, h - 2);
             }
         });
         Logger {
